@@ -144,6 +144,11 @@ class Classic_Editor {
 			remove_filter( 'display_post_states', 'gutenberg_add_gutenberg_post_state' );
 			remove_action( 'edit_form_top', 'gutenberg_remember_classic_editor_when_saving_posts' );
 		}
+
+		// Preserve custom HTML elements for users allowed to post unfiltered HTML
+		// when using the classic editor (prevents TinyMCE from stripping elements
+		// on Text ⇄ Visual switches).
+		add_filter( 'tiny_mce_before_init', array( __CLASS__, 'allow_custom_elements_for_unfiltered' ), 20 );
 	}
 
 	public static function remove_gutenberg_hooks( $remove = 'all' ) {
@@ -1025,6 +1030,59 @@ class Classic_Editor {
 		}
 
 		return $src;
+	}
+
+	/**
+	 * Allow all elements/attributes in TinyMCE for users with `unfiltered_html`
+	 * while editing in the classic editor. This prevents stripping of custom
+	 * elements when switching between Text and Visual modes. Does not affect
+	 * users without this capability, preserving default sanitization expectations.
+	 *
+	 * @param array $init TinyMCE init settings.
+	 * @return array Possibly adjusted init settings.
+	 */
+	public static function allow_custom_elements_for_unfiltered( $init ) {
+		if ( ! is_admin() || ! current_user_can( 'unfiltered_html' ) ) {
+			return $init;
+		}
+
+		// Apply only on classic editor screens to avoid unintended side effects.
+		$apply = false;
+		$post_id = self::get_edited_post_id();
+		$settings = self::get_settings();
+
+		// Attempt to reliably detect the classic editor context.
+		if ( function_exists( 'get_current_screen' ) ) {
+			$screen = get_current_screen();
+			if ( isset( $screen->base ) && 'post' === $screen->base ) {
+				if ( $post_id ) {
+					$apply = ( 'classic' === $settings['editor'] || self::is_classic( $post_id ) );
+				} else {
+					// On Add New when classic is default and not switching to block.
+					$apply = ( 'classic' === $settings['editor'] && ! isset( $_GET['classic-editor__forget'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+				}
+			}
+		}
+
+		if ( ! $apply ) {
+			return $init;
+		}
+
+		// Ensure extended elements and children allow any element/attributes.
+		// Keeps unknown/custom tags intact during TinyMCE processing for these users.
+		if ( empty( $init['extended_valid_elements'] ) ) {
+			$init['extended_valid_elements'] = '*[*]';
+		} else {
+			$init['extended_valid_elements'] .= ',*[*]';
+		}
+
+		if ( empty( $init['valid_children'] ) ) {
+			$init['valid_children'] = '+*[*]';
+		} else {
+			$init['valid_children'] .= ',+*[*]';
+		}
+
+		return $init;
 	}
 }
 
